@@ -1,0 +1,3 @@
+add_general_test(nano_utils_ebo_storage_test ebo_storage_test.cpp)
+add_general_test(nano_utils_cacheline_storage_test cacheline_storage_test.cpp)
+add_general_test(nano_utils_misc_test misc_test.cpp)
