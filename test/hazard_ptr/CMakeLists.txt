@@ -1,1 +1,1 @@
-add_general_test(hazard_ptr_test hazard_ptr_test.cpp hazard_ptr)
+add_general_test(hazard_ptr_test hazard_ptr_test.cpp)

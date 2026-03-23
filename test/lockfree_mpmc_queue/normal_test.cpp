@@ -2,15 +2,15 @@
 
 #include <barrier>
 
-#include "mpmc_queue/mpmc_queue.h"
+#include "lockfree_mpmc_queue/lockfree_mpmc_queue.h"
 
-TEST(MPMCQueueNormalTest, Basic1) {
+TEST(LockfreeMPMCQueueNormalTest, Basic1) {
   constexpr std::size_t THREAD_CNT{1};
   constexpr std::size_t VAL_SCALE{1000000ul};
 
   std::vector<int> valtag(VAL_SCALE, 0);
 
-  NanoCU::MPMCQueue::ConcurrentQueue<int, THREAD_CNT> q{};
+  NanoCU::MPMCQueue::LockFreeQueue<int, THREAD_CNT> q{};
 
   for (int i = 0; i < VAL_SCALE; i++) {
     q.push(i);
@@ -35,14 +35,14 @@ TEST(MPMCQueueNormalTest, Basic1) {
   EXPECT_EQ(passed, true);
 }
 
-TEST(MPMCQueueNormalTest, Basic2) {
+TEST(LockfreeMPMCQueueNormalTest, Basic2) {
   constexpr std::size_t VAL_SCALE{10000ul};
   constexpr std::size_t TEST_CYCLE{100};
 
   bool passed{true};
   int checksum{};
 
-  NanoCU::MPMCQueue::ConcurrentQueue<int, 1> q{};
+  NanoCU::MPMCQueue::LockFreeQueue<int, 1> q{};
   for (std::size_t cycle = 0; cycle < TEST_CYCLE; cycle++) {
     std::vector<int> valtag(VAL_SCALE, 0);
     for (int i = 0; i < VAL_SCALE; i++) {

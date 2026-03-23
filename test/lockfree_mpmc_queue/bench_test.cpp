@@ -4,14 +4,14 @@
 #include <chrono>
 #include <queue>
 
-#include "mpmc_queue/mpmc_queue.h"
+#include "lockfree_mpmc_queue/lockfree_mpmc_queue.h"
 
-void mpmcqueue_concurrent_bench_test() {
+void lockfree_mpmcqueue_concurrent_bench_test() {
   constexpr std::size_t THREAD_CNT{20};
   constexpr std::size_t VAL_SCALE{10000000ul};
   std::vector<int> valtag(VAL_SCALE, 0);
 
-  NanoCU::MPMCQueue::ConcurrentQueue<int, THREAD_CNT> queue{};
+  NanoCU::MPMCQueue::LockFreeQueue<int, THREAD_CNT> queue{};
 
   std::barrier b{THREAD_CNT};
   std::vector<std::thread> js(THREAD_CNT);
@@ -136,9 +136,9 @@ auto bench{[](void (*func)(), const char name[]) {
   std::cout << "===== End bench " << end1 - beg1 << std::endl;
 }};
 
-TEST(MPMCQueueBenchTest, WithLockQueue) {
-  bench(mpmcqueue_concurrent_bench_test, "ConcurrentMPMCQueue");
+TEST(LockfreeMPMCQueueBenchTest, WithLockQueue) {
+  bench(lockfree_mpmcqueue_concurrent_bench_test, "LockfreeMPMCQueue");
   bench(normal_mutex_queue_test, "MutexQueue");
   bench(normal_mutex_queue_test, "MutexQueue");
-  bench(mpmcqueue_concurrent_bench_test, "ConcurrentMPMCQueue");
+  bench(lockfree_mpmcqueue_concurrent_bench_test, "LockfreeMPMCQueue");
 }

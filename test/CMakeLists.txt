@@ -8,6 +8,7 @@ endfunction()
 
 include(GoogleTest)
 
+add_subdirectory(hazard_ptr)
+add_subdirectory(lockfree_mpmc_queue)
 add_subdirectory(mpmc_queue)
 add_subdirectory(nano_utils)
-add_subdirectory(hazard_ptr)

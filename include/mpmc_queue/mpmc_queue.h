@@ -15,7 +15,7 @@ struct QueueNode {
 };
 
 template <typename ValType, std::size_t WorkerCnt, typename ValAlloc = std::allocator<ValType>>
-class LockFreeQueue
+class ConcurrentQueue
     : private EBOStorage<ValAlloc>,
       private EBOStorage<typename std::allocator_traits<ValAlloc>::template rebind_alloc<QueueNode<ValType>>> {
  private:
@@ -35,14 +35,14 @@ class LockFreeQueue
   HazPtr::HazPtrManager<QueueNode_, WorkerCnt, 1, NodeAlloc_, QueueNodeDeleter_> hazptr_mgr_;
 
  public:
-  LockFreeQueue(const LockFreeQueue&) = delete;
-  LockFreeQueue(LockFreeQueue&&) = delete;
-  auto operator=(const LockFreeQueue) -> LockFreeQueue& = delete;
-  auto operator=(LockFreeQueue&&) -> LockFreeQueue& = delete;
+  ConcurrentQueue(const ConcurrentQueue&) = delete;
+  ConcurrentQueue(ConcurrentQueue&&) = delete;
+  auto operator=(const ConcurrentQueue) -> ConcurrentQueue& = delete;
+  auto operator=(ConcurrentQueue&&) -> ConcurrentQueue& = delete;
 
   template <typename ValAlloc_ = ValAlloc,
-            typename Requires_ = std::enable_if_t<!std::is_base_of_v<LockFreeQueue, std::remove_cvref_t<ValAlloc_>>>>
-  LockFreeQueue(ValAlloc_&& val_alloc = ValAlloc{})
+            typename Requires_ = std::enable_if_t<!std::is_base_of_v<ConcurrentQueue, std::remove_cvref_t<ValAlloc_>>>>
+  ConcurrentQueue(ValAlloc_&& val_alloc = ValAlloc{})
       : EBOStorage<ValAlloc>{std::forward<ValAlloc_>(val_alloc)},
         EBOStorage<NodeAlloc_>{static_cast<EBOStorage<ValAlloc>*>(this)->get()},
         hazptr_mgr_{static_cast<EBOStorage<ValAlloc>*>(this)->get(),
@@ -50,17 +50,17 @@ class LockFreeQueue
     auto& node_alloc{static_cast<EBOStorage<NodeAlloc_>*>(this)->get()};
     auto to_sentinel{std::allocator_traits<NodeAlloc_>::allocate(node_alloc, 1)};
     std::allocator_traits<NodeAlloc_>::construct(node_alloc, to_sentinel);
-    to_head_.store(to_sentinel, std::memory_order_relaxed);
-    to_tail_.store(to_sentinel, std::memory_order_relaxed);
+    to_head_.store(to_sentinel, std::memory_order_release);
+    to_tail_.store(to_sentinel, std::memory_order_release);
   }
 
-  LockFreeQueue() : LockFreeQueue{ValAlloc{}} {}
+  ConcurrentQueue() : ConcurrentQueue{ValAlloc{}} {}
 
-  ~LockFreeQueue() {
+  ~ConcurrentQueue() {
     auto& node_alloc{static_cast<EBOStorage<NodeAlloc_>*>(this)->get()};
-    auto to_node{to_head_.load(std::memory_order_relaxed)};
+    auto to_node{to_head_.load(std::memory_order_acquire)};
     while (to_node) {
-      auto to_next{to_node->to_next_.load(std::memory_order_relaxed)};
+      auto to_next{to_node->to_next_.load(std::memory_order_acquire)};
       std::allocator_traits<NodeAlloc_>::destroy(node_alloc, to_node);
       std::allocator_traits<NodeAlloc_>::deallocate(node_alloc, to_node, 1);
       to_node = to_next;

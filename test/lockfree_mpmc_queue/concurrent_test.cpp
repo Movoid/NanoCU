@@ -2,9 +2,9 @@
 
 #include <barrier>
 
-#include "mpmc_queue/mpmc_queue.h"
+#include "lockfree_mpmc_queue/lockfree_mpmc_queue.h"
 
-TEST(MPMCQueueConcurrentTest, Basic) {
+TEST(LockfreeMPMCQueueConcurrentTest, Basic) {
   constexpr std::size_t THREAD_CNT{10};
   constexpr std::size_t VAL_SCALE{10000000ul};
 
@@ -16,7 +16,7 @@ TEST(MPMCQueueConcurrentTest, Basic) {
   std::vector<std::thread> workers(THREAD_CNT);
   std::barrier b{THREAD_CNT};
 
-  NanoCU::MPMCQueue::ConcurrentQueue<int, THREAD_CNT> q{};
+  NanoCU::MPMCQueue::LockFreeQueue<int, THREAD_CNT> q{};
 
   for (std::size_t i = 0; i < PUSH_THREAD_CNT; i++) {
     workers[i] = std::thread{[&q, &b, VAL_SCALE, PUSH_THREAD_CNT, i]() {
