@@ -1,1 +1,3 @@
 add_general_test(mpmc_queue_normal_test normal_test.cpp)
+add_general_test(mpmc_queue_concurrent_test concurrent_test.cpp)
+add_general_test(mpmc_queue_bench_test bench_test.cpp)

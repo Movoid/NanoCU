@@ -20,8 +20,7 @@ enable_testing()
 
 # Pre
 
-add_subdirectory(include)
 add_subdirectory(lib)
-add_subdirectory(src)
+add_subdirectory(include)
 add_subdirectory(test)
 

@@ -2,6 +2,8 @@
 
 #include <array>
 #include <atomic>
+#include <cassert>
+#include <iostream>
 #include <memory>
 #include <optional>
 #include <unordered_map>
@@ -88,7 +90,7 @@ class RetireContext
   template <typename ValAlloc_, typename ValDeleter_>
   RetireContext(ValAlloc_&& alloc, ValDeleter_&& deleter)
       : EBOStorage<ValAlloc>{std::forward<ValAlloc_>(alloc)},
-        EBOStorage<NodeAlloc_>{*this},
+        EBOStorage<NodeAlloc_>{static_cast<EBOStorage<ValAlloc>*>(this)->get()},
         EBOStorage<ValDeleter>{std::forward<ValDeleter_>(deleter)} {}
 
   ~RetireContext() {
@@ -170,6 +172,7 @@ class HazPtrManager : private EBOStorage<ValAlloc>, private EBOStorage<ValDelete
 
     do {
       if (cur_ctx_idx_ >= WorkerCnt) {
+        assert(false && "Unexpected worker count.");
         return std::nullopt;
       }
     } while (!next_ctx_idx_.compare_exchange_weak(cur_ctx_idx_, cur_ctx_idx_ + 1, std::memory_order_release,
@@ -191,13 +194,13 @@ class HazPtrManager : private EBOStorage<ValAlloc>, private EBOStorage<ValDelete
 
  public:
   HazPtrManager(const HazPtrManager& obj) = delete;
-  auto operator=(const HazPtrManager& obj) -> HazPtrManager& = delete;
   HazPtrManager(HazPtrManager&& obj) = delete;
+  auto operator=(const HazPtrManager& obj) -> HazPtrManager& = delete;
   auto operator=(HazPtrManager&& obj) -> HazPtrManager& = delete;
 
-  template <typename ValAlloc_ = std::allocator<ValType>, typename ValDeleter_ = std::default_delete<ValType>>
-  HazPtrManager(ValAlloc_&& val_alloc = std::allocator<ValType>{},
-                ValDeleter_&& val_deleter = std::default_delete<ValType>{})
+  template <typename ValAlloc_ = ValAlloc, typename ValDeleter_ = ValDeleter,
+            typename Requires_ = std::enable_if_t<!std::is_base_of_v<HazPtrManager, std::remove_cvref_t<ValAlloc_>>>>
+  HazPtrManager(ValAlloc_&& val_alloc = ValAlloc{}, ValDeleter_&& val_deleter = ValDeleter{})
       : EBOStorage<ValAlloc>{std::forward<ValAlloc_>(val_alloc)},
         EBOStorage<ValDeleter>{std::forward<ValDeleter_>(val_deleter)},
         hazptr_ctxs_{},
@@ -245,7 +248,7 @@ class HazPtrManager : private EBOStorage<ValAlloc>, private EBOStorage<ValDelete
     return to_retire_ctx->retire(ptr);
   }
 
-  auto check_hazptr(ValType* ptr) -> bool {
+  auto check_local_hazptr(ValType* ptr) -> bool {
     auto ctx{get_context()};
     if (!ctx.has_value()) {
       return false;
