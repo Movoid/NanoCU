@@ -1,18 +1,16 @@
 #include <gtest/gtest.h>
 
-#include <barrier>
-
 #include "lockfree_mpmc_queue/lockfree_mpmc_queue.h"
 
-TEST(LockfreeMPMCQueueNormalTest, Basic1) {
+TEST(LockFreeMPMCQueueNormalTest, Basic1) {
   constexpr std::size_t THREAD_CNT{1};
-  constexpr std::size_t VAL_SCALE{1000000ul};
+  constexpr std::size_t VAL_SCALE{1000000ull};
 
-  std::vector<int> valtag(VAL_SCALE, 0);
+  std::vector<std::size_t> valtag(VAL_SCALE, 0);
 
-  NanoCU::MPMCQueue::LockFreeQueue<int, THREAD_CNT> q{};
+  NanoCU::MPMCQueue::LockFreeQueue<std::size_t, THREAD_CNT> q{};
 
-  for (int i = 0; i < VAL_SCALE; i++) {
+  for (std::size_t i = 0; i < VAL_SCALE; i++) {
     q.push(i);
   }
 
@@ -21,7 +19,7 @@ TEST(LockfreeMPMCQueueNormalTest, Basic1) {
   }
 
   bool passed{true};
-  int checksum{};
+  std::size_t checksum{};
   for (std::size_t val = 0; val < VAL_SCALE; val++) {
     checksum += valtag[val];
     if (valtag[val] != 1) {
@@ -35,17 +33,17 @@ TEST(LockfreeMPMCQueueNormalTest, Basic1) {
   EXPECT_EQ(passed, true);
 }
 
-TEST(LockfreeMPMCQueueNormalTest, Basic2) {
-  constexpr std::size_t VAL_SCALE{10000ul};
+TEST(LockFreeMPMCQueueNormalTest, Basic2) {
+  constexpr std::size_t VAL_SCALE{10000ull};
   constexpr std::size_t TEST_CYCLE{100};
 
   bool passed{true};
-  int checksum{};
+  std::size_t checksum{};
 
-  NanoCU::MPMCQueue::LockFreeQueue<int, 1> q{};
+  NanoCU::MPMCQueue::LockFreeQueue<std::size_t, 1> q{};
   for (std::size_t cycle = 0; cycle < TEST_CYCLE; cycle++) {
-    std::vector<int> valtag(VAL_SCALE, 0);
-    for (int i = 0; i < VAL_SCALE; i++) {
+    std::vector<std::size_t> valtag(VAL_SCALE, 0);
+    for (std::size_t i = 0; i < VAL_SCALE; i++) {
       q.push(i);
     }
 

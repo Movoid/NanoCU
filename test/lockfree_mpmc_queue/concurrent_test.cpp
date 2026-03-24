@@ -1,67 +1,20 @@
 #include <gtest/gtest.h>
 
-#include <barrier>
-
 #include "lockfree_mpmc_queue/lockfree_mpmc_queue.h"
+#include "test_helpers/mpmc_queue_test.h"
 
-TEST(LockfreeMPMCQueueConcurrentTest, Basic) {
-  constexpr std::size_t THREAD_CNT{10};
-  constexpr std::size_t VAL_SCALE{10000000ul};
+TEST(LockFreeMPMCQueueConcurrentTest, Basic) {
+  constexpr std::size_t THREAD_CNT{20};
+  constexpr std::size_t VAL_SCALE{10000000ull};
 
-  std::vector<int> valtag(VAL_SCALE, 0);
+  bench(basic_concurrent_test<NanoCU::MPMCQueue::LockFreeQueue<std::size_t, THREAD_CNT>, THREAD_CNT, VAL_SCALE>,
+        "LockFree MPMCQueue");
+}
 
-  constexpr std::size_t PUSH_THREAD_CNT{THREAD_CNT / 2};
-  constexpr std::size_t POP_THREAD_CNT{THREAD_CNT - PUSH_THREAD_CNT};
+TEST(LockFreeMPMCQueueConcurrentTest, Phased) {
+  constexpr std::size_t THREAD_CNT{20};
+  constexpr std::size_t VAL_SCALE{10000000ull};
 
-  std::vector<std::thread> workers(THREAD_CNT);
-  std::barrier b{THREAD_CNT};
-
-  NanoCU::MPMCQueue::LockFreeQueue<int, THREAD_CNT> q{};
-
-  for (std::size_t i = 0; i < PUSH_THREAD_CNT; i++) {
-    workers[i] = std::thread{[&q, &b, VAL_SCALE, PUSH_THREAD_CNT, i]() {
-      b.arrive_and_wait();
-      std::size_t blksz{(VAL_SCALE + PUSH_THREAD_CNT - 1) / PUSH_THREAD_CNT};
-      std::size_t beg{blksz * i};
-      std::size_t end{std::min(beg + blksz, VAL_SCALE)};
-      for (std::size_t val = beg; val < end; val++) {
-        q.push(val);
-      }
-    }};
-  }
-
-  for (std::size_t i = 0; i < POP_THREAD_CNT; i++) {
-    workers[PUSH_THREAD_CNT + i] = std::thread{[&valtag, &q, &b, VAL_SCALE, POP_THREAD_CNT, i]() {
-      b.arrive_and_wait();
-      std::this_thread::sleep_for(std::chrono::milliseconds{10});
-      std::size_t blksz{(VAL_SCALE + PUSH_THREAD_CNT - 1) / PUSH_THREAD_CNT};
-      std::size_t beg{blksz * i};
-      std::size_t end{std::min(beg + blksz, VAL_SCALE)};
-      for (std::size_t val = beg; val < end;) {
-        auto res{q.try_pop()};
-        if (res.has_value()) {
-          val++;
-          valtag[res.value()] = 1;
-        }
-      }
-    }};
-  }
-
-  for (auto& worker : workers) {
-    worker.join();
-  }
-
-  bool passed{true};
-  int checksum{};
-  for (std::size_t val = 0; val < VAL_SCALE; val++) {
-    checksum += valtag[val];
-    if (valtag[val] != 1) {
-      passed = false;
-      break;
-    }
-  }
-
-  std::cout << (passed ? "passed" : "failed") << std::endl;
-  std::cout << checksum << std::endl;
-  EXPECT_EQ(passed, true);
+  bench(phased_concurrent_test<NanoCU::MPMCQueue::LockFreeQueue<std::size_t, THREAD_CNT>, THREAD_CNT, VAL_SCALE>,
+        "LockFree MPMCQueue");
 }
