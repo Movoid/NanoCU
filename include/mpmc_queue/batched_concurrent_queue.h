@@ -262,6 +262,9 @@ class BatchedConcurrentQueue
       /**
        * Release.
        * 如果没能及时 Commit, 则重启整个操作.
+       *
+       * WARNING: 如果 pop worker 一直设置 INVALID,
+       * 则会陷入全局 livelock.
        */
       if (!to_old_tail->slot_states_[old_next_slot_idx].compare_exchange_strong(
               expected_slot_state, desired_slot_state, std::memory_order_release, std::memory_order_relaxed)) {

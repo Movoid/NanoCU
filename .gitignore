@@ -1,5 +1,6 @@
 .vscode/
 build/
+tmp/
 
 **/compile_commands.json
 **/*.log

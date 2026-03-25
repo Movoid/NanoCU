@@ -22,6 +22,7 @@ struct BatchedLockFreeQueueNode {
   static constexpr auto IS_SEALED{std::size_t{1} << (sizeof(std::size_t) * 8 - 1)};
   std::atomic<std::size_t> next_slot_idx_{};  // is_sealed.
 
+  std::atomic<std::ptrdiff_t> max_committed_slot_idx_{-1};
   std::atomic<BatchedLockFreeQueueNode*> to_next_{};
 };
 
@@ -61,10 +62,10 @@ class BatchedLockFreeQueue : private EBOStorage<ValAlloc>,
         hazptr_mgr_{static_cast<EBOStorage<ValAlloc>*>(this)->get(),
                     QueueNodeDeleter_{&(static_cast<EBOStorage<NodeAlloc_>*>(this)->get())}} {
     auto& node_alloc{static_cast<EBOStorage<NodeAlloc_>*>(this)->get()};
-    auto to_sentinel{std::allocator_traits<NodeAlloc_>::allocate(node_alloc, 1)};
-    std::allocator_traits<NodeAlloc_>::construct(node_alloc, to_sentinel);
-    to_head_.store(to_sentinel, std::memory_order_release);
-    to_tail_.store(to_sentinel, std::memory_order_release);
+    auto to_new_node{std::allocator_traits<NodeAlloc_>::allocate(node_alloc, 1)};
+    std::allocator_traits<NodeAlloc_>::construct(node_alloc, to_new_node);
+    to_head_.store(to_new_node, std::memory_order_release);
+    to_tail_.store(to_new_node, std::memory_order_release);
   }
 
   BatchedLockFreeQueue() : BatchedLockFreeQueue{ValAlloc{}} {}
@@ -131,7 +132,56 @@ class BatchedLockFreeQueue : private EBOStorage<ValAlloc>,
           break;
         }
 
+        /**
+         * 在确定当前 slot 有元素时才能获取此 slot.
+         * 否则将陷入 livelock 困境.
+         *
+         * 然而, 就算想要获得的 slot 上是 empty,
+         * 如果队列后面有元素, 就不能返回 `std::nullopt`.
+         *
+         * WARNING: 不能因为当前想要获得的 slot 上是 empty 就直接返回 `std::nullopt`,
+         * 如果当前 slot 上的 push 没有和当前 worker 同步,
+         * 而 queue 后面的元素 push worker 与当前 worker 有同步,
+         * 即使这个 slot 是 empty,
+         * 然而 queue 后续的元素仍是可见的, queue 是可见的非空状态.
+         *
+         * 一种解法是,
+         * 只在当前 slot 能确定是 queue 最后一个 slot 时,
+         * 且同时是 empty 时,
+         * 才能确保 queue 后续没有元素,
+         * 且当前 slot 元素还未构造,
+         * 此时直接返回 `std::nullopt`,
+         * 使得这个唯一的末尾元素, 总能成功构造, 整个系统永远前进.
+         *
+         * NOTE: 然而上述解法不能解决问题,
+         * 如果有 2 个 push worker, slot 0 的 push worker 被 pop worker 设为 invalid,
+         * 在 slot 1 构造完成前, 原本 slot 0 的 push worker 重启并占据 slot 2,
+         * 而 pop worker 重启操作并访问 slot 1, 因为 slot 2 的存在, 将 slot 1 又设为 invalid,
+         * 仍陷入 livelock.
+         */
+
+        /**
+         * 这里的根本问题在于 pop worker 难以判断 queue 的后面是否存在可见的元素.
+         * pop worker 如果能确定当前位置后面存在 committed 元素,
+         * 就允许直接设置当前 slot 为 invalid 然后向后寻找.
+         * 否则, 直接返回 `std::nullopt`, 因为后续没有可见的元素.
+         *
+         * 给每个 node 维护 max committed slot idx,
+         * 根据此判断即可.
+         */
+
         auto new_start_slot_idx{old_start_slot_idx + 1};
+        auto to_next{to_old_head->to_next_.load(std::memory_order_relaxed)};
+        auto max_committed_slot_idx{to_old_head->max_committed_slot_idx_.load(std::memory_order_relaxed)};
+        /**
+         * 如果当前想要取得的 slot `old_next_slot_idx` 及其之后, 不存在可见的元素,
+         * 则获取此位置没有意义.
+         */
+        if (max_committed_slot_idx < static_cast<std::ptrdiff_t>(old_start_slot_idx) && !to_next) {
+          hazptr_mgr_.unset_hazptr(0);
+          return std::nullopt;
+        }
+
         if (!to_old_head->start_slot_idx_.compare_exchange_strong(
                 old_start_slot_idx, new_start_slot_idx, std::memory_order_relaxed, std::memory_order_relaxed)) {
           continue;
@@ -156,8 +206,12 @@ class BatchedLockFreeQueue : private EBOStorage<ValAlloc>,
         auto expected_slot_state{QueueNode_::SlotState_::EMPTY};
         auto desired_slot_state{QueueNode_::SlotState_::INVALID};
         /**
-         * 如果遇到 EMPTY 且将其成功设为 INVALID,
-         * 则应该重启操作, 因为 queue 中后续可能有元素, queue 非空就不能返回 `std::nullopt`.
+         * WARNING: 不能在这里无限制地设置 INVALID,
+         * 这将陷入全局 livelock.
+         *
+         * 然而也不能在这里修复,
+         * 因为此处已经拿到了 `old_start_slot_idx`, 必须操作.
+         * 则必须在拿到 `old_start_slot_idx` 前就检查.
          */
         if (to_old_head->slot_states_[old_start_slot_idx].compare_exchange_strong(
                 expected_slot_state, desired_slot_state, std::memory_order_acquire, std::memory_order_acquire)) {
@@ -198,31 +252,23 @@ class BatchedLockFreeQueue : private EBOStorage<ValAlloc>,
         auto old_next_slot_idx_with_flag{to_old_tail->next_slot_idx_.load(std::memory_order_acquire)};
         if (old_next_slot_idx_with_flag & QueueNode_::IS_SEALED) {
           /**
-           * 创造 new node.
+           * 尝试更新 `to_old_tail->to_next_` 到 new node.
+           * 如果失败, 则析构 new node 并继续尝试更新 `to_tail_`.
+           * 如果成功, helping 更新 `to_tail_`.
            */
-          auto to_new_node{std::allocator_traits<NodeAlloc_>::allocate(node_alloc, 1)};
-          std::allocator_traits<NodeAlloc_>::construct(node_alloc, to_new_node);
-
-          /**
-           * 当前 `to_old_tail` node 已不可用.
-           * 尝试将 new node 挂到 tail,
-           * 无论成功或失败, 都需要重启操作.
-           */
-          if (to_tail_.compare_exchange_strong(to_old_tail, to_new_node, std::memory_order_release,
-                                               std::memory_order_relaxed)) {
-            /**
-             * 成功更新 `to_tail_`.
-             * 此时取得 `to_old_tail` 的所有权.
-             */
-            to_old_tail->to_next_.store(to_new_node, std::memory_order_release);
-          } else {
-            /**
-             * 更新 `to_tail_` 失败.
-             * 有另一个 worker 抢先更新.
-             */
-            std::allocator_traits<NodeAlloc_>::destroy(node_alloc, to_new_node);
-            std::allocator_traits<NodeAlloc_>::deallocate(node_alloc, to_new_node, 1);
+          auto to_next{to_old_tail->to_next_.load(std::memory_order::acquire)};
+          if (!to_next) {
+            auto to_new_node{std::allocator_traits<NodeAlloc_>::allocate(node_alloc, 1)};
+            std::allocator_traits<NodeAlloc_>::construct(node_alloc, to_new_node);
+            if (to_old_tail->to_next_.compare_exchange_strong(to_next, to_new_node, std::memory_order_release,
+                                                              std::memory_order_acquire)) {
+              to_next = to_new_node;
+            } else {
+              std::allocator_traits<NodeAlloc_>::destroy(node_alloc, to_new_node);
+              std::allocator_traits<NodeAlloc_>::deallocate(node_alloc, to_new_node, 1);
+            }
           }
+          to_tail_.compare_exchange_strong(to_old_tail, to_next, std::memory_order_release, std::memory_order_relaxed);
           need_restart = true;
           break;
         }
@@ -268,6 +314,31 @@ class BatchedLockFreeQueue : private EBOStorage<ValAlloc>,
         push_val = std::move(to_old_tail->val_slots_[old_next_slot_idx].value());
         to_old_tail->val_slots_[old_next_slot_idx] = std::nullopt;
         continue;
+      }
+
+      /**
+       * 成功设置 state 为 COMMITTED.
+       * 尝试更新当前 node 的 max committed slot idx.
+       *
+       * WARNING: 即使一个 push worker 在此处卡死, 没有更新 max committed slot idx,
+       * 未来其他的 push worker 也会推进 max committed slot idx.
+       * 这不阻碍全局进展.
+       *
+       * 在这种设计下, release 的职责是由 slot state 和 max committed slot idx 上的操作共同承担的.
+       */
+      while (true) {
+        auto old_max_committed_slot_idx{to_old_tail->max_committed_slot_idx_.load(std::memory_order_relaxed)};
+        if (old_max_committed_slot_idx > static_cast<std::ptrdiff_t>(old_next_slot_idx)) {
+          break;
+        }
+        /**
+         * 如果 cmpxchg 失败,
+         * 则重试, 并判断新的 max committed slot idx 是否已经超过当前 slot idx.
+         */
+        if (to_old_tail->max_committed_slot_idx_.compare_exchange_strong(
+                old_max_committed_slot_idx, old_next_slot_idx, std::memory_order_relaxed, std::memory_order_relaxed)) {
+          break;
+        }
       }
 
       hazptr_mgr_.unset_hazptr(1);

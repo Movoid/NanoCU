@@ -39,6 +39,7 @@ void basic_concurrent_test() {
   for (std::size_t i = 0; i < POP_THREAD_CNT; i++) {
     workers[PUSH_THREAD_CNT + i] = std::thread{[&valtag, &queue, &b, VAL_SCALE, POP_THREAD_CNT, i]() {
       b.arrive_and_wait();
+      std::this_thread::sleep_for(std::chrono::milliseconds{100});
       std::size_t blksz{(VAL_SCALE + POP_THREAD_CNT - 1) / POP_THREAD_CNT};
       std::size_t beg{blksz * i};
       std::size_t end{std::min(beg + blksz, VAL_SCALE)};
@@ -46,7 +47,7 @@ void basic_concurrent_test() {
         auto res{queue.try_pop()};
         if (res.has_value()) {
           val++;
-          valtag[res.value()] = 1;
+          valtag[res.value()]++;
         }
       }
     }};
@@ -111,7 +112,7 @@ void phased_concurrent_test() {
         auto res{queue.try_pop()};
         if (res.has_value()) {
           val++;
-          valtag[res.value()] = 1;
+          valtag[res.value()]++;
         }
       }
     }};
@@ -268,11 +269,15 @@ void phased_mutex_queue_test() {
 }
 
 auto bench{[](void (*func)(), const char name[]) {
+  constexpr std::size_t CYCLE{5};
+
   std::cout << "===== Start bench " << name << '\n';
   auto beg1{std::chrono::high_resolution_clock::now()};
-  func();
+  for (std::size_t i = 0; i < CYCLE; i++) {
+    func();
+  }
   auto end1{std::chrono::high_resolution_clock::now()};
-  std::cout << "===== End bench " << name << ' ' << std::chrono::duration_cast<std::chrono::milliseconds>(end1 - beg1)
-            << '\n'
+  std::cout << "===== End bench " << name << ' '
+            << std::chrono::duration_cast<std::chrono::milliseconds>(end1 - beg1) / CYCLE << '\n'
             << std::endl;
 }};
