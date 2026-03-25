@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 
-#include "mpmc_queue/batched_mpmc_queue.h"
-#include "mpmc_queue/mpmc_queue.h"
+#include "mpmc_queue/batched_concurrent_queue.h"
+#include "mpmc_queue/concurrent_queue.h"
 
 TEST(MPMCQueueNormalTest, Basic1) {
   constexpr std::size_t THREAD_CNT{1};

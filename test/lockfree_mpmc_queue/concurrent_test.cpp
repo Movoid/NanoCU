@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "lockfree_mpmc_queue/lockfree_mpmc_queue.h"
+#include "lockfree_mpmc_queue/lockfree_queue.h"
 #include "test_helpers/mpmc_queue_test.h"
 
 TEST(LockFreeMPMCQueueConcurrentTest, Basic) {

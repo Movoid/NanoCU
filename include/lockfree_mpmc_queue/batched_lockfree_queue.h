@@ -9,7 +9,7 @@ namespace NanoCU {
 namespace MPMCQueue {
 
 template <typename ValType, std::size_t BlockSize>
-struct BatchedQueueNode {
+struct BatchedLockFreeQueueNode {
   enum class SlotState_ {
     EMPTY,
     COMMITTED,
@@ -22,41 +22,40 @@ struct BatchedQueueNode {
   static constexpr auto IS_SEALED{std::size_t{1} << (sizeof(std::size_t) * 8 - 1)};
   std::atomic<std::size_t> next_slot_idx_{};  // is_sealed.
 
-  std::atomic<BatchedQueueNode*> to_next_{};
+  std::atomic<BatchedLockFreeQueueNode*> to_next_{};
 };
 
 template <typename ValType, std::size_t WorkerCnt, std::size_t BlockSize = 32,
           typename ValAlloc = std::allocator<ValType>>
-class BatchedConcurrentQueue
-    : private EBOStorage<ValAlloc>,
-      private EBOStorage<
-          typename std::allocator_traits<ValAlloc>::template rebind_alloc<BatchedQueueNode<ValType, BlockSize>>> {
+class BatchedLockFreeQueue : private EBOStorage<ValAlloc>,
+                             private EBOStorage<typename std::allocator_traits<ValAlloc>::template rebind_alloc<
+                                 BatchedLockFreeQueueNode<ValType, BlockSize>>> {
  private:
-  using BatchedQueueNode_ = BatchedQueueNode<ValType, BlockSize>;
-  using NodeAlloc_ = typename std::allocator_traits<ValAlloc>::template rebind_alloc<BatchedQueueNode_>;
+  using QueueNode_ = BatchedLockFreeQueueNode<ValType, BlockSize>;
+  using NodeAlloc_ = typename std::allocator_traits<ValAlloc>::template rebind_alloc<QueueNode_>;
 
   struct QueueNodeDeleter_ {
     NodeAlloc_* to_node_alloc_{};
-    auto operator()(BatchedQueueNode_* to_node) const {
+    auto operator()(QueueNode_* to_node) const {
       std::allocator_traits<NodeAlloc_>::destroy(*to_node_alloc_, to_node);
       std::allocator_traits<NodeAlloc_>::deallocate(*to_node_alloc_, to_node, 1);
     }
   };
 
-  std::atomic<BatchedQueueNode_*> to_head_{};
-  std::atomic<BatchedQueueNode_*> to_tail_{};
-  HazPtr::HazPtrManager<BatchedQueueNode_, WorkerCnt, 2, NodeAlloc_, QueueNodeDeleter_> hazptr_mgr_;
+  std::atomic<QueueNode_*> to_head_{};
+  std::atomic<QueueNode_*> to_tail_{};
+  HazPtr::HazPtrManager<QueueNode_, WorkerCnt, 2, NodeAlloc_, QueueNodeDeleter_> hazptr_mgr_;
 
  public:
-  BatchedConcurrentQueue(const BatchedConcurrentQueue&) = delete;
-  BatchedConcurrentQueue(BatchedConcurrentQueue&&) = delete;
-  auto operator=(const BatchedConcurrentQueue) -> BatchedConcurrentQueue& = delete;
-  auto operator=(BatchedConcurrentQueue&&) -> BatchedConcurrentQueue& = delete;
+  BatchedLockFreeQueue(const BatchedLockFreeQueue&) = delete;
+  BatchedLockFreeQueue(BatchedLockFreeQueue&&) = delete;
+  auto operator=(const BatchedLockFreeQueue) -> BatchedLockFreeQueue& = delete;
+  auto operator=(BatchedLockFreeQueue&&) -> BatchedLockFreeQueue& = delete;
 
   template <
       typename ValAlloc_ = ValAlloc,
-      typename Requires_ = std::enable_if_t<!std::is_base_of_v<BatchedConcurrentQueue, std::remove_cvref_t<ValAlloc_>>>>
-  BatchedConcurrentQueue(ValAlloc_&& val_alloc = ValAlloc{})
+      typename Requires_ = std::enable_if_t<!std::is_base_of_v<BatchedLockFreeQueue, std::remove_cvref_t<ValAlloc_>>>>
+  BatchedLockFreeQueue(ValAlloc_&& val_alloc = ValAlloc{})
       : EBOStorage<ValAlloc>{std::forward<ValAlloc_>(val_alloc)},
         EBOStorage<NodeAlloc_>{static_cast<EBOStorage<ValAlloc>*>(this)->get()},
         hazptr_mgr_{static_cast<EBOStorage<ValAlloc>*>(this)->get(),
@@ -68,9 +67,9 @@ class BatchedConcurrentQueue
     to_tail_.store(to_sentinel, std::memory_order_release);
   }
 
-  BatchedConcurrentQueue() : BatchedConcurrentQueue{ValAlloc{}} {}
+  BatchedLockFreeQueue() : BatchedLockFreeQueue{ValAlloc{}} {}
 
-  ~BatchedConcurrentQueue() {
+  ~BatchedLockFreeQueue() {
     auto& node_alloc{static_cast<EBOStorage<NodeAlloc_>*>(this)->get()};
     auto to_node{to_head_.load(std::memory_order_acquire)};
     while (to_node) {
@@ -93,7 +92,7 @@ class BatchedConcurrentQueue
     while (true) {
       auto to_old_head{to_head_.load(std::memory_order_relaxed)};
 
-      BatchedQueueNode_* tmp{};
+      QueueNode_* tmp{};
       do {
         tmp = to_old_head;
         hazptr_mgr_.set_hazptr(0, to_old_head);
@@ -106,7 +105,7 @@ class BatchedConcurrentQueue
       while (true) {
         old_start_slot_idx = to_old_head->start_slot_idx_.load(std::memory_order_acquire);
         auto old_next_slot_idx_with_flag{to_old_head->next_slot_idx_.load(std::memory_order_relaxed)};
-        auto old_next_slot_idx{old_next_slot_idx_with_flag & (~BatchedQueueNode_::IS_SEALED)};
+        auto old_next_slot_idx{old_next_slot_idx_with_flag & (~QueueNode_::IS_SEALED)};
 
         /**
          * 如果 pop 到了当前 Node 终点.
@@ -120,7 +119,7 @@ class BatchedConcurrentQueue
             return std::nullopt;
           }
 
-          if (old_next_slot_idx_with_flag & (BatchedQueueNode_::IS_SEALED)) {
+          if (old_next_slot_idx_with_flag & (QueueNode_::IS_SEALED)) {
             if (to_head_.compare_exchange_strong(to_old_head, to_next, std::memory_order_release,
                                                  std::memory_order_relaxed)) {
               hazptr_mgr_.retire(to_old_head);
@@ -148,14 +147,14 @@ class BatchedConcurrentQueue
 
       auto slot_state{to_old_head->slot_states_[old_start_slot_idx].load(std::memory_order_acquire)};
 
-      if (slot_state == BatchedQueueNode_::SlotState_::COMMITTED) {
+      if (slot_state == QueueNode_::SlotState_::COMMITTED) {
         auto ret{std::move(to_old_head->val_slots_[old_start_slot_idx].value())};
         hazptr_mgr_.unset_hazptr(0);
         return std::make_optional(std::move(ret));
       } else {
-        assert((slot_state == BatchedQueueNode_::SlotState_::EMPTY) && "Unexpected.");
-        auto expected_slot_state{BatchedQueueNode_::SlotState_::EMPTY};
-        auto desired_slot_state{BatchedQueueNode_::SlotState_::INVALID};
+        assert((slot_state == QueueNode_::SlotState_::EMPTY) && "Unexpected.");
+        auto expected_slot_state{QueueNode_::SlotState_::EMPTY};
+        auto desired_slot_state{QueueNode_::SlotState_::INVALID};
         /**
          * 如果遇到 EMPTY 且将其成功设为 INVALID,
          * 则应该重启操作, 因为 queue 中后续可能有元素, queue 非空就不能返回 `std::nullopt`.
@@ -164,7 +163,7 @@ class BatchedConcurrentQueue
                 expected_slot_state, desired_slot_state, std::memory_order_acquire, std::memory_order_acquire)) {
           continue;
         } else {
-          assert((expected_slot_state == BatchedQueueNode_::SlotState_::COMMITTED) && "Unexpected.");
+          assert((expected_slot_state == QueueNode_::SlotState_::COMMITTED) && "Unexpected.");
           auto ret{std::move(to_old_head->val_slots_[old_start_slot_idx].value())};
           hazptr_mgr_.unset_hazptr(0);
           return std::make_optional(std::move(ret));
@@ -185,7 +184,7 @@ class BatchedConcurrentQueue
     while (true) {
       auto to_old_tail{to_tail_.load(std::memory_order_relaxed)};
 
-      BatchedQueueNode_* tmp{};
+      QueueNode_* tmp{};
       do {
         tmp = to_old_tail;
         hazptr_mgr_.set_hazptr(1, to_old_tail);
@@ -197,7 +196,7 @@ class BatchedConcurrentQueue
       bool need_restart{};
       while (true) {
         auto old_next_slot_idx_with_flag{to_old_tail->next_slot_idx_.load(std::memory_order_acquire)};
-        if (old_next_slot_idx_with_flag & BatchedQueueNode_::IS_SEALED) {
+        if (old_next_slot_idx_with_flag & QueueNode_::IS_SEALED) {
           /**
            * 创造 new node.
            */
@@ -228,10 +227,10 @@ class BatchedConcurrentQueue
           break;
         }
 
-        old_next_slot_idx = old_next_slot_idx_with_flag & (~BatchedQueueNode_::IS_SEALED);
+        old_next_slot_idx = old_next_slot_idx_with_flag & (~QueueNode_::IS_SEALED);
         auto new_next_slot_idx_with_flag{old_next_slot_idx + 1};
         if (new_next_slot_idx_with_flag == to_old_tail->val_slots_.size()) {
-          new_next_slot_idx_with_flag |= BatchedQueueNode_::IS_SEALED;
+          new_next_slot_idx_with_flag |= QueueNode_::IS_SEALED;
         }
 
         /**
@@ -257,15 +256,15 @@ class BatchedConcurrentQueue
 
       to_old_tail->val_slots_[old_next_slot_idx] = std::move(push_val);
 
-      auto expected_slot_state{BatchedQueueNode_::SlotState_::EMPTY};
-      auto desired_slot_state{BatchedQueueNode_::SlotState_::COMMITTED};
+      auto expected_slot_state{QueueNode_::SlotState_::EMPTY};
+      auto desired_slot_state{QueueNode_::SlotState_::COMMITTED};
       /**
        * Release.
        * 如果没能及时 Commit, 则重启整个操作.
        */
       if (!to_old_tail->slot_states_[old_next_slot_idx].compare_exchange_strong(
               expected_slot_state, desired_slot_state, std::memory_order_release, std::memory_order_relaxed)) {
-        assert((expected_slot_state == BatchedQueueNode_::SlotState_::INVALID) && "Unexpected.");
+        assert((expected_slot_state == QueueNode_::SlotState_::INVALID) && "Unexpected.");
         push_val = std::move(to_old_tail->val_slots_[old_next_slot_idx].value());
         to_old_tail->val_slots_[old_next_slot_idx] = std::nullopt;
         continue;

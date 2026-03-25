@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "lockfree_mpmc_queue/lockfree_mpmc_queue.h"
+#include "lockfree_mpmc_queue/lockfree_queue.h"
 
 TEST(LockFreeMPMCQueueNormalTest, Basic1) {
   constexpr std::size_t THREAD_CNT{1};
