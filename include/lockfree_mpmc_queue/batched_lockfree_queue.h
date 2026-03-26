@@ -3,27 +3,41 @@
 #include <atomic>
 
 #include "hazard_ptr/hazard_ptr.h"
+#include "nano_utils/nano_utils.h"
 
 namespace NanoCU {
 
 namespace MPMCQueue {
 
 template <typename ValType, std::size_t BlockSize>
+
 struct BatchedLockFreeQueueNode {
   enum class SlotState_ {
     EMPTY,
     COMMITTED,
     INVALID,
   };
-  std::array<std::atomic<SlotState_>, BlockSize> slot_states_;  // metadata
-  std::array<std::optional<ValType>, BlockSize> val_slots_;
-
-  std::atomic<std::size_t> start_slot_idx_{};
   static constexpr auto IS_SEALED{std::size_t{1} << (sizeof(std::size_t) * 8 - 1)};
-  std::atomic<std::size_t> next_slot_idx_{};  // is_sealed.
 
+  struct Slot {
+    std::atomic<SlotState_> state_;
+    std::optional<ValType> val_;
+  };
+
+  /**
+   * 最佳的布局和对齐策略.
+   * `to_next_` 只有在 `slots_` 满了的时候才会被访问, 放在靠近 `slots_` 末尾的位置.
+   * 把 `max_committed_slot_idx_` 放在更靠近 `slots_` 的地方, 在 `to_next_` 前面,
+   * 几乎不影响 `to_next_` 的 cache hit,
+   * 还能让 push worker 在访问 `slots_` 后段时,
+   * 提前载入 `max_committed_slot_idx_` 并有助于 cache hit.
+   */
+  std::array<Slot, BlockSize> slots_;
   std::atomic<std::ptrdiff_t> max_committed_slot_idx_{-1};
   std::atomic<BatchedLockFreeQueueNode*> to_next_{};
+
+  alignas(CACHELINE_SIZE) std::atomic<std::size_t> start_slot_idx_{};
+  std::atomic<std::size_t> next_slot_idx_{};  // is_sealed.
 };
 
 template <typename ValType, std::size_t WorkerCnt, std::size_t BlockSize = 32,
@@ -43,8 +57,8 @@ class BatchedLockFreeQueue : private EBOStorage<ValAlloc>,
     }
   };
 
-  std::atomic<QueueNode_*> to_head_{};
-  std::atomic<QueueNode_*> to_tail_{};
+  alignas(CACHELINE_SIZE) std::atomic<QueueNode_*> to_head_{};
+  alignas(CACHELINE_SIZE) std::atomic<QueueNode_*> to_tail_{};
   HazPtr::HazPtrManager<QueueNode_, WorkerCnt, 2, NodeAlloc_, QueueNodeDeleter_> hazptr_mgr_;
 
  public:
@@ -195,10 +209,10 @@ class BatchedLockFreeQueue : private EBOStorage<ValAlloc>,
 
       assert((old_start_slot_idx != ULLONG_MAX) && "Unexpected.");
 
-      auto slot_state{to_old_head->slot_states_[old_start_slot_idx].load(std::memory_order_acquire)};
+      auto slot_state{to_old_head->slots_[old_start_slot_idx].state_.load(std::memory_order_acquire)};
 
       if (slot_state == QueueNode_::SlotState_::COMMITTED) {
-        auto ret{std::move(to_old_head->val_slots_[old_start_slot_idx].value())};
+        auto ret{std::move(to_old_head->slots_[old_start_slot_idx].val_.value())};
         hazptr_mgr_.unset_hazptr(0);
         return std::make_optional(std::move(ret));
       } else {
@@ -213,12 +227,12 @@ class BatchedLockFreeQueue : private EBOStorage<ValAlloc>,
          * 因为此处已经拿到了 `old_start_slot_idx`, 必须操作.
          * 则必须在拿到 `old_start_slot_idx` 前就检查.
          */
-        if (to_old_head->slot_states_[old_start_slot_idx].compare_exchange_strong(
+        if (to_old_head->slots_[old_start_slot_idx].state_.compare_exchange_strong(
                 expected_slot_state, desired_slot_state, std::memory_order_acquire, std::memory_order_acquire)) {
           continue;
         } else {
           assert((expected_slot_state == QueueNode_::SlotState_::COMMITTED) && "Unexpected.");
-          auto ret{std::move(to_old_head->val_slots_[old_start_slot_idx].value())};
+          auto ret{std::move(to_old_head->slots_[old_start_slot_idx].val_.value())};
           hazptr_mgr_.unset_hazptr(0);
           return std::make_optional(std::move(ret));
         }
@@ -267,10 +281,14 @@ class BatchedLockFreeQueue : private EBOStorage<ValAlloc>,
              *
              * 注意设置各种 slot idx.
              */
-            to_new_node->next_slot_idx_.store(1, std::memory_order_relaxed);
+            std::size_t new_node_next_slot_idx{1};
+            if constexpr (BlockSize == 1) {
+              new_node_next_slot_idx |= QueueNode_::IS_SEALED;
+            }
+            to_new_node->next_slot_idx_.store(new_node_next_slot_idx, std::memory_order_relaxed);
             to_new_node->max_committed_slot_idx_.store(0, std::memory_order_relaxed);
-            to_new_node->val_slots_[0] = std::move(push_val);
-            to_new_node->slot_states_[0].store(QueueNode_::SlotState_::COMMITTED, std::memory_order_release);
+            to_new_node->slots_[0].val_ = std::move(push_val);
+            to_new_node->slots_[0].state_.store(QueueNode_::SlotState_::COMMITTED, std::memory_order_release);
 
             if (to_old_tail->to_next_.compare_exchange_strong(to_next, to_new_node, std::memory_order_release,
                                                               std::memory_order_acquire)) {
@@ -280,8 +298,8 @@ class BatchedLockFreeQueue : private EBOStorage<ValAlloc>,
               hazptr_mgr_.unset_hazptr(1);
               return;
             } else {
-              push_val = std::move(to_new_node->val_slots_[0].value());
-              to_new_node->val_slots_[0] = std::nullopt;
+              push_val = std::move(to_new_node->slots_[0].val_.value());
+              to_new_node->slots_[0].val_ = std::nullopt;
               std::allocator_traits<NodeAlloc_>::destroy(node_alloc, to_new_node);
               std::allocator_traits<NodeAlloc_>::deallocate(node_alloc, to_new_node, 1);
             }
@@ -294,7 +312,7 @@ class BatchedLockFreeQueue : private EBOStorage<ValAlloc>,
 
         old_next_slot_idx = old_next_slot_idx_with_flag & (~QueueNode_::IS_SEALED);
         auto new_next_slot_idx_with_flag{old_next_slot_idx + 1};
-        if (new_next_slot_idx_with_flag == to_old_tail->val_slots_.size()) {
+        if (new_next_slot_idx_with_flag == to_old_tail->slots_.size()) {
           new_next_slot_idx_with_flag |= QueueNode_::IS_SEALED;
         }
 
@@ -319,7 +337,7 @@ class BatchedLockFreeQueue : private EBOStorage<ValAlloc>,
 
       assert((old_next_slot_idx != ULLONG_MAX) && "Unexpected.");
 
-      to_old_tail->val_slots_[old_next_slot_idx] = std::move(push_val);
+      to_old_tail->slots_[old_next_slot_idx].val_ = std::move(push_val);
 
       auto expected_slot_state{QueueNode_::SlotState_::EMPTY};
       auto desired_slot_state{QueueNode_::SlotState_::COMMITTED};
@@ -327,11 +345,11 @@ class BatchedLockFreeQueue : private EBOStorage<ValAlloc>,
        * Release.
        * 如果没能及时 Commit, 则重启整个操作.
        */
-      if (!to_old_tail->slot_states_[old_next_slot_idx].compare_exchange_strong(
+      if (!to_old_tail->slots_[old_next_slot_idx].state_.compare_exchange_strong(
               expected_slot_state, desired_slot_state, std::memory_order_release, std::memory_order_relaxed)) {
         assert((expected_slot_state == QueueNode_::SlotState_::INVALID) && "Unexpected.");
-        push_val = std::move(to_old_tail->val_slots_[old_next_slot_idx].value());
-        to_old_tail->val_slots_[old_next_slot_idx] = std::nullopt;
+        push_val = std::move(to_old_tail->slots_[old_next_slot_idx].val_.value());
+        to_old_tail->slots_[old_next_slot_idx].val_ = std::nullopt;
         continue;
       }
 

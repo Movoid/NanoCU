@@ -30,8 +30,8 @@ class ConcurrentQueue
     }
   };
 
-  std::atomic<QueueNode_*> to_head_{};
-  std::atomic<QueueNode_*> to_tail_{};
+  alignas(CACHELINE_SIZE) std::atomic<QueueNode_*> to_head_{};
+  alignas(CACHELINE_SIZE) std::atomic<QueueNode_*> to_tail_{};
   HazPtr::HazPtrManager<QueueNode_, WorkerCnt, 1, NodeAlloc_, QueueNodeDeleter_> hazptr_mgr_;
 
  public:

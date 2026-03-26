@@ -30,8 +30,8 @@ class LockFreeQueue
     }
   };
 
-  std::atomic<QueueNode_*> to_sentinel_{};
-  std::atomic<QueueNode_*> to_tail_{};
+  alignas(CACHELINE_SIZE) std::atomic<QueueNode_*> to_sentinel_{};
+  alignas(CACHELINE_SIZE) std::atomic<QueueNode_*> to_tail_{};
   HazPtr::HazPtrManager<QueueNode_, WorkerCnt, 3, NodeAlloc_, QueueNodeDeleter_> hazptr_mgr_;
 
  public:
