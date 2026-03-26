@@ -260,14 +260,33 @@ class BatchedLockFreeQueue : private EBOStorage<ValAlloc>,
           if (!to_next) {
             auto to_new_node{std::allocator_traits<NodeAlloc_>::allocate(node_alloc, 1)};
             std::allocator_traits<NodeAlloc_>::construct(node_alloc, to_new_node);
+
+            /**
+             * WARNING: 必须保证 new node 上至少有一个 committed val,
+             * 保证一个节点 `to_next_ != nullptr` 时, 一定表明后续存在 committed val.
+             *
+             * 注意设置各种 slot idx.
+             */
+            to_new_node->next_slot_idx_.store(1, std::memory_order_relaxed);
+            to_new_node->max_committed_slot_idx_.store(0, std::memory_order_relaxed);
+            to_new_node->val_slots_[0] = std::move(push_val);
+            to_new_node->slot_states_[0].store(QueueNode_::SlotState_::COMMITTED, std::memory_order_release);
+
             if (to_old_tail->to_next_.compare_exchange_strong(to_next, to_new_node, std::memory_order_release,
                                                               std::memory_order_acquire)) {
               to_next = to_new_node;
+              to_tail_.compare_exchange_strong(to_old_tail, to_next, std::memory_order_release,
+                                               std::memory_order_relaxed);
+              hazptr_mgr_.unset_hazptr(1);
+              return;
             } else {
+              push_val = std::move(to_new_node->val_slots_[0].value());
+              to_new_node->val_slots_[0] = std::nullopt;
               std::allocator_traits<NodeAlloc_>::destroy(node_alloc, to_new_node);
               std::allocator_traits<NodeAlloc_>::deallocate(node_alloc, to_new_node, 1);
             }
           }
+
           to_tail_.compare_exchange_strong(to_old_tail, to_next, std::memory_order_release, std::memory_order_relaxed);
           need_restart = true;
           break;
