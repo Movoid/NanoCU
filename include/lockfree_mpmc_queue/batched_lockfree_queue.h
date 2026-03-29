@@ -10,7 +10,6 @@ namespace NanoCU {
 namespace MPMCQueue {
 
 template <typename ValType, std::size_t BlockSize>
-
 struct BatchedLockFreeQueueNode {
   enum class SlotState_ {
     EMPTY,
@@ -147,31 +146,13 @@ class BatchedLockFreeQueue : private EBOStorage<ValAlloc>,
         }
 
         /**
-         * 在确定当前 slot 有元素时才能获取此 slot.
-         * 否则将陷入 livelock 困境.
-         *
-         * 然而, 就算想要获得的 slot 上是 empty,
-         * 如果队列后面有元素, 就不能返回 `std::nullopt`.
+         * 此处处理不当将导致 livelock 问题。
          *
          * WARNING: 不能因为当前想要获得的 slot 上是 empty 就直接返回 `std::nullopt`,
          * 如果当前 slot 上的 push 没有和当前 worker 同步,
          * 而 queue 后面的元素 push worker 与当前 worker 有同步,
          * 即使这个 slot 是 empty,
          * 然而 queue 后续的元素仍是可见的, queue 是可见的非空状态.
-         *
-         * 一种解法是,
-         * 只在当前 slot 能确定是 queue 最后一个 slot 时,
-         * 且同时是 empty 时,
-         * 才能确保 queue 后续没有元素,
-         * 且当前 slot 元素还未构造,
-         * 此时直接返回 `std::nullopt`,
-         * 使得这个唯一的末尾元素, 总能成功构造, 整个系统永远前进.
-         *
-         * NOTE: 然而上述解法不能解决问题,
-         * 如果有 2 个 push worker, slot 0 的 push worker 被 pop worker 设为 invalid,
-         * 在 slot 1 构造完成前, 原本 slot 0 的 push worker 重启并占据 slot 2,
-         * 而 pop worker 重启操作并访问 slot 1, 因为 slot 2 的存在, 将 slot 1 又设为 invalid,
-         * 仍陷入 livelock.
          */
 
         /**
