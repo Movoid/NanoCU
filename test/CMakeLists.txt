@@ -3,6 +3,7 @@ function(add_general_test target source)
   target_link_libraries(${target} PRIVATE GTest::gtest_main)
   target_include_directories(${target} PRIVATE ${PROJECT_SOURCE_DIR}/include)
   target_include_directories(${target} PRIVATE ${PROJECT_SOURCE_DIR}/lib)
+  target_include_directories(${target} PRIVATE ${moodycamel_concurrentqueue_SOURCE_DIR})
   gtest_discover_tests(${target})
 endfunction()
 

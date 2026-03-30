@@ -1,4 +1,5 @@
 add_general_test(lockfree_mpmc_queue_bench_test bench_test.cpp)
+add_general_test(lockfree_mpmc_queue_more_bench_test more_bench_test.cpp)
 add_general_test(lockfree_mpmc_queue_concurrent_test concurrent_test.cpp)
 add_general_test(lockfree_mpmc_queue_edgecase_test edgecase_test.cpp)
 add_general_test(lockfree_mpmc_queue_normal_test normal_test.cpp)

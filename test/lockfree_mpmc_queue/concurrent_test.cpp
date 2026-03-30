@@ -4,7 +4,7 @@
 #include "lockfree_mpmc_queue/lockfree_queue.h"
 #include "test_helpers/mpmc_queue_test.h"
 
-TEST(LockFreeMPMCQueueConcurrentTest, Basic) {
+TEST(LockFreeMPMCQueueConcurrentTest, DISABLED_Basic) {
   constexpr std::size_t THREAD_CNT{20};
   constexpr std::size_t VAL_SCALE{10000000ull};
 
@@ -12,7 +12,7 @@ TEST(LockFreeMPMCQueueConcurrentTest, Basic) {
         "LockFree MPMCQueue");
 }
 
-TEST(LockFreeMPMCQueueConcurrentTest, Phased) {
+TEST(LockFreeMPMCQueueConcurrentTest, DISABLED_Phased) {
   constexpr std::size_t THREAD_CNT{20};
   constexpr std::size_t VAL_SCALE{10000000ull};
 

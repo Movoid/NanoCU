@@ -14,7 +14,13 @@ FetchContent_Declare(
   URL https://github.com/google/googletest/archive/03597a01ee50ed33e9dfd640b249b4be3799d395.zip
 )
 
+FetchContent_Declare(
+  moodycamel_concurrentqueue
+  URL https://github.com/cameron314/concurrentqueue/archive/refs/tags/v1.0.4.tar.gz
+)
+
 FetchContent_MakeAvailable(googletest)
+FetchContent_MakeAvailable(moodycamel_concurrentqueue)
 
 enable_testing()
 
@@ -23,4 +29,3 @@ enable_testing()
 add_subdirectory(lib)
 add_subdirectory(include)
 add_subdirectory(test)
-
